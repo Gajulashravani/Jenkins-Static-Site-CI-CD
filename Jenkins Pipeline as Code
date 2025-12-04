@@ -1,0 +1,65 @@
+// Defines the automated CI/CD pipeline using Declarative Pipeline syntax.
+// This script runs on the Jenkins Controller/Agent.
+
+pipeline {
+    // The agent specifies where the work happens (e.g., 'any' available agent)
+    agent any 
+
+    environment {
+        // Define common variables for the pipeline run
+        DOCKER_IMAGE = "shravani/static-website" // Replace with your Docker Hub username
+        REGISTRY_CREDENTIALS = "docker-hub-credentials" // Jenkins secret ID for Docker login
+    }
+
+    stages {
+        stage('1. Build Docker Image') {
+            steps {
+                echo 'Building Docker image from Dockerfile...'
+                // Build the Docker image using the Dockerfile located in the repo root
+                script {
+                    def app = docker.build("${DOCKER_IMAGE}:${env.BUILD_ID}", "-f Dockerfile ./src")
+                    env.DOCKER_TAG = "${env.BUILD_ID}"
+                }
+            }
+        }
+
+        stage('2. Static Code Check (Simulated Testing)') {
+            steps {
+                echo 'Running quick static checks and linting before deployment...'
+                // This simulates a quality gate where unit tests or linting tools would run.
+                sh 'grep -q "Hello DevOps" ./src/index.html || { echo "Basic content check failed!"; exit 1; }'
+                echo 'Static checks passed. Code is clean for deployment.'
+            }
+        }
+
+        stage('3. Push to Registry') {
+            steps {
+                echo "Pushing validated image ${DOCKER_IMAGE}:${env.DOCKER_TAG} to Docker Hub..."
+                // Use Jenkins credentials for secure authentication
+                withCredentials([usernamePassword(credentialsId: "${REGISTRY_CREDENTIALS}", passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                    sh "docker tag ${DOCKER_IMAGE}:${env.BUILD_ID} ${DOCKER_IMAGE}:${env.DOCKER_TAG}"
+                    sh "echo \$DOCKER_PASSWORD | docker login -u \$DOCKER_USERNAME --password-stdin"
+                    sh "docker push ${DOCKER_IMAGE}:${env.DOCKER_TAG}"
+                }
+                echo 'Image successfully secured in the registry.'
+            }
+        }
+
+        stage('4. Deploy to Server (Container Update)') {
+            steps {
+                echo "Executing deployment on the target server. Updating container..."
+                // Command to be executed on the remote target server (e.g., via SSH step)
+                sh """
+                # Stop and gracefully remove the previous version of the container
+                docker stop static-app || true
+                docker rm static-app || true
+                
+                # Pull the latest image and launch the new container on port 8080
+                docker run -d --name static-app -p 8080:80 ${DOCKER_IMAGE}:${env.DOCKER_TAG}
+                
+                echo "Deployment complete. Application is running and updated on port 8080."
+                """
+            }
+        }
+    }
+}
